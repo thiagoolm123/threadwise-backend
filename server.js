@@ -1,94 +1,87 @@
-// server.js
+// server.js — Threadwise Backend for Gmail Add-on
+// Matches Apps Script callOpenAI() interface exactly.
 
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const fetch = require('node-fetch');
+const OpenAI = require('openai');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const port = process.env.PORT || 8080;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// ✅ Public healthcheck
-app.get('/', (req, res) => {
+// Validate env vars
+if (!process.env.OPENAI_API_KEY) {
+  console.warn("WARNING: OPENAI_API_KEY is missing.");
+}
+
+const SERVICE_KEY = process.env.THREADWISE_SERVICE_KEY;
+
+// Auth middleware (Apps Script sends x-service-key)
+function authMiddleware(req, res, next) {
+  if (!SERVICE_KEY) {
+    return res.status(401).json({ error: "Unauthorized: THREADWISE_SERVICE_KEY not configured" });
+  }
+
+  const incoming = req.headers["x-service-key"];
+  if (!incoming || incoming !== SERVICE_KEY) {
+    return res.status(401).json({ error: "Unauthorized: invalid or missing service key" });
+  }
+
+  next();
+}
+
+// OpenAI client
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+// Root / Health check
+app.get("/", (req, res) => {
   res.json({
-    status: 'ok',
-    service: 'threadwise-backend',
+    status: "ok",
+    service: "threadwise-backend",
+    message: "Threadwise backend is running"
+  });
+});
+
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    service: "threadwise-backend",
     time: new Date().toISOString()
   });
 });
 
-// 🔐 Auth middleware for protected routes
-function checkServiceKey(req, res, next) {
-  const expected = process.env.THREADWISE_SERVICE_KEY;
-
-  // If no key set, skip auth (dev mode)
-  if (!expected) return next();
-
-  const apiKey = req.headers['x-service-key'];
-
-  if (apiKey && apiKey === expected) {
-    return next();
-  }
-
-  return res.status(401).json({ error: 'Unauthorized' });
-}
-
-// ✅ Main chat endpoint
-app.post('/v1/chat', checkServiceKey, async (req, res) => {
+// MAIN ENDPOINT: /v1/chat (this is what Apps Script calls)
+app.post("/v1/chat", authMiddleware, async (req, res) => {
   try {
-    if (!OPENAI_API_KEY) {
-      return res.status(500).json({ error: 'OPENAI_API_KEY not configured on server' });
-    }
-
-    const { messages, maxTokens, temperature } = req.body || {};
+    const { messages, maxTokens } = req.body || {};
 
     if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: 'messages[] is required' });
+      return res.status(400).json({ error: "messages[] is required" });
     }
 
-    const max_tokens = maxTokens || 300;
-    const temp = typeof temperature === 'number' ? temperature : 0.7;
-
-    const openaiResp = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        messages,
-        temperature: temp,
-        max_tokens
-      })
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini", // best lightweight model for Gmail replies
+      messages,
+      max_tokens: maxTokens || 300,
+      temperature: 0.7
     });
 
-    const data = await openaiResp.json();
+    const reply = completion.choices?.[0]?.message?.content?.trim() || "";
 
-    if (!openaiResp.ok) {
-      console.error('OpenAI error:', data);
-      return res.status(500).json({ error: data.error?.message || 'OpenAI error' });
-    }
-
-    const reply = data.choices?.[0]?.message?.content || '';
-
-    return res.json({
-      ok: true,
-      reply
-    });
+    return res.json({ reply });
   } catch (err) {
-    console.error('Error in /v1/chat:', err);
-    return res.status(500).json({ error: 'Internal server error' });
+    console.error("Error in /v1/chat:", err);
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`Threadwise Backend API server running on port ${PORT}`);
+app.listen(port, () => {
+  console.log(`Threadwise backend running on port ${port}`);
 });
