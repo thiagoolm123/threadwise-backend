@@ -11,24 +11,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Simple auth using a shared service key (optional but recommended)
-app.use((req, res, next) => {
-  const apiKey = req.headers['x-service-key'];
-  const expected = process.env.THREADWISE_SERVICE_KEY;
-
-  if (!expected) {
-    // If no key is set in env, skip auth (dev mode)
-    return next();
-  }
-
-  if (apiKey && apiKey === expected) {
-    return next();
-  }
-
-  return res.status(401).json({ error: 'Unauthorized' });
-});
-
-// ✅ Healthcheck / root route
+// ✅ Public healthcheck route
 app.get('/', (req, res) => {
   res.json({
     status: 'ok',
@@ -37,10 +20,26 @@ app.get('/', (req, res) => {
   });
 });
 
-// ✅ Main chat endpoint (placeholder for now)
-app.post('/v1/chat', async (req, res) => {
+// 🔐 Auth middleware – used ONLY on protected routes
+function checkServiceKey(req, res, next) {
+  const expected = process.env.THREADWISE_SERVICE_KEY;
+
+  // If no key is set in env, skip auth (dev mode)
+  if (!expected) return next();
+
+  const apiKey = req.headers['x-service-key'];
+
+  if (apiKey && apiKey === expected) {
+    return next();
+  }
+
+  return res.status(401).json({ error: 'Unauthorized' });
+}
+
+// ✅ Protected chat endpoint
+app.post('/v1/chat', checkServiceKey, async (req, res) => {
   try {
-    // For now, just echo back that it works.
+    // For now we just confirm it works and echo the body.
     // Later we’ll proxy this to OpenAI.
     res.json({
       ok: true,
